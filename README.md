@@ -7,7 +7,7 @@ This script gets installed onto a device (via SCP etc.) running Extreme EXOS 16 
 #### Run Script Manually
 To run the script manually:
 ```
-run script extreme_optics_influxdb.py <device_name> <influxdb_host> <influxdb_username> <influxdb_password> <influxdb_database> --vr 2
+run script extreme_optics_influxdb.py <device_name> <influxdb_host> <influxdb_username> <influxdb_password> <influxdb_database> --vr 2 --influxdb_port 
 ```
 **Parametres:**
 - Device Hostname to be used as the InfluxDB `hostname` tag.
@@ -16,6 +16,7 @@ run script extreme_optics_influxdb.py <device_name> <influxdb_host> <influxdb_us
 - InfluxDB Password
 - InfluxDB Database name
 - Optionally: pass the VR number (Mgmt is VR 2, default is VR 1) if you're not running the management network out of the default VR.
+- Optionally: pass the influxdb port number if it's different to the standard TCP 8086 port.
 
 #### Run Script Periodically
 Create a Universal Port Manager (UPM) profile:

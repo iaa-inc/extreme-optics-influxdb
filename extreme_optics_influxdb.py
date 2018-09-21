@@ -27,11 +27,9 @@ import exsh
 import re, urllib2, base64, argparse, socket, httplib
 
 METRICS = {
-        'txPower' : 'tx-power',
-        'rxPower' : 'rx-power',
-        'temp'   : 'temperature',
-        'txBiasCurrent' : 'tx-current',
-        'voltageAux1'   : 'voltage',
+        'txPower'       : 'tx-power',
+        'rxPower'       : 'rx-power',
+        'txBiasCurrent' : 'tx-current'
 }
 
 # Extreme Networks ioctl to change the VR that a socket operates in.
@@ -58,37 +56,56 @@ def get_optics_data():
     # multiple XML trees are returned as one string, need to split them.
     ports_raw = xml_reply.replace("</reply><reply>", "</reply>\n<reply>").split('\n')
 
+    # parse the data into a nicer, data structure
+    # multiple XML trees are returned as one string, need to split them.
     ports_data = []
 
-    for port in ports_raw:
-        data = {}
-        # parse XML to something useable
-        reply_ele = et.fromstring(port)
-        port_info = reply_ele.findall('.message/show_ports_transceiver')[0]
+    ports_parsed = [et.fromstring(x).findall(
+        '.message/show_ports_transceiver')[0] for x in ports_raw]
 
-        # if a temperature exists, then we can assume an optic is present.
-        if len(port_info.findall('temp')) > 0 and len(port_info) > 0:
-            data['name'] = port_info.findall('port')[0].text
-            
+    ports_parsed_iter = iter(ports_parsed)
+
+    for port in ports_parsed_iter:
+        data = {}
+        # check there isn't a portErrorString element, if not we can assume there is an optic
+        if len(port) > 0 and len(port.findall('portErrorString')) == 0 and port.findall('partNumberIsValid')[0].text == '1':
+            data['name'] = port.findall('port')[0].text
             # make the port_name match the ifName - unstacked switches should still return a 1:xx port number.
             if not re.match('^\d+:\d+$', data['name']):
-                data['name'] = "1:" + data['name'] #dodgy, I know but it's how extreme do it
+                # dodgy, I know but it's how extreme do it
+                data['name'] = "1:" + data['name']
 
-            for metric in METRICS.keys():
-                # make prettier key names with consistent formatting
-                data[METRICS[metric]] = port_info.findall(metric)[0].text
+            data['channels'] = {}
+            num_channels = int(port.findall('numChannels')[0].text)
+            curr_chan = port
+
+            for chan in range(0, num_channels):
+                data['channels'][chan] = {}
+                # Temp and voltage is only present on the top level channel
+                if chan == 0:
+                    data['temperature'] = curr_chan.findall('temp')[0].text
+                    data['voltage'] = curr_chan.findall('voltageAux1')[0].text
+                for metric in METRICS.keys():
+                    # make prettier key names with consistent formatting
+                    data['channels'][chan][METRICS[metric]] = curr_chan.findall(metric)[0].text
+                if chan+1 != num_channels:
+                    curr_chan = ports_parsed_iter.next()  # go to the next port
 
             ports_data.append(data)
 
     return ports_data
 
+
+
 def fix_extreme_inf_values(data):
     # Extremes that show optics with -Inf RX power sometimes returns -9999.000000.
     # Lets fix that to be the same as other ports with no rx detected.
     for port in data:
-        if port['rx-power'] == '-9999.000000':
-            port['rx-power'] = '-40.000000'
-
+        for channel in port['channels'].values():
+            if channel['rx-power'] == '-9999.000000':
+                channel['rx-power'] = '-40.000000'
+            if channel['tx-power'] == '-9999.000000':
+                channel['tx-power'] = '0.00'
     return data
 
 
@@ -98,9 +115,19 @@ def create_lineprotocol_data(ports_data, device_name):
     line_data = []
 
     for port in ports_data:
-        tags = "optics,device=" + device_name + ",port=" + port['name']
-        fields = ",".join([key + "=" + port[key] for key in port.keys() if key != 'name'])
-        line_data.append(tags + " " + fields)
+        measurement = "optics"
+        tags = "device=" + device_name + ",port=" + port['name']
+        fields = ",".join([key + "=" + port[key] for key in port.keys() if key not in  ['name', 'channels']])
+        line_data.append(measurement + "," + tags + " " + fields)
+
+        for channel, chan_data in port['channels'].items():
+            channel_measurement = "optics_channels"
+            channel_tags = ",".join([tags, "channel=" + str(channel)])
+            channel_fields = ",".join(
+                [key + "=" + chan_data[key] for key in chan_data.keys()]
+            )
+            line_data.append(channel_measurement + "," +
+                             channel_tags + " " + channel_fields)
 
     return "\n".join(line_data)
 
